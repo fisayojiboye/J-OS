@@ -44,4 +44,13 @@ ALWAYS_REQUIRE_APPROVAL = [
 AGENT_NAME      = "J-OS"               # Jude's Operating System
 OPERATOR_NAME   = "Jude"
 OPERATOR_ROLE   = "Real Estate Operator, Lagos Nigeria"
+
+# ── Twilio ────────────────────────────────────────────────────────────────────
+TWILIO_ACCOUNT_SID      = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN       = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_WHATSAPP_NUMBER  = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+
+# ── Telegram ──────────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID", "")
  
