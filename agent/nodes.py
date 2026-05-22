@@ -1,24 +1,17 @@
-"""
-agent/nodes.py — LangGraph nodes for the Jude Agent pipeline.
- 
-Flow: load_memory → classify → route → [draft | escalate] → update_memory → finalize
-"""
- 
-import json
+﻿import json
 import time
 import re
+from pathlib import Path
 import anthropic
 from config.settings import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_TOKENS
 from agent.state import AgentState
 from agent.prompt import build_system_prompt
 from agent.memory.manager import MemoryManager
- 
+
 memory = MemoryManager(seed=True)
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
- 
- 
+
 def node_load_memory(state: AgentState) -> dict:
-    """Pull all memory layers into context block."""
     memory.short_term.add_turn("user", state["message"], source=state["source"])
     metadata = {"is_vip": state.get("sender_is_vip", False)}
     score_data = memory.priority.score_message(
@@ -34,10 +27,39 @@ def node_load_memory(state: AgentState) -> dict:
         "keywords_hit":    score_data["keywords_hit"],
         "completed_nodes": state.get("completed_nodes", []) + ["load_memory"],
     }
- 
- 
+
+def node_calendar_check(state: AgentState) -> dict:
+    if not Path("credentials.json").exists() and not Path("token.json").exists():
+        return {
+            "completed_nodes": state.get("completed_nodes", []) + ["calendar_skip"],
+        }
+    try:
+        from integrations.calendar import CalendarService
+        cal           = CalendarService()
+        todays_events = cal.get_todays_events()
+        upcoming      = cal.get_upcoming_events(days=3)
+        schedule_context = "Jude current schedule:\n"
+        if todays_events:
+            schedule_context += "Today:\n"
+            for e in todays_events:
+                schedule_context += f"  - {e['start_time']} - {e['title']}\n"
+        else:
+            schedule_context += "Today: Calendar is clear.\n"
+        if upcoming:
+            schedule_context += "Next 3 days:\n"
+            for e in upcoming[:5]:
+                schedule_context += f"  - {e['start_date']} {e['start_time']} - {e['title']}\n"
+        memory.short_term.set_context("schedule_context", schedule_context)
+        return {
+            "completed_nodes": state.get("completed_nodes", []) + ["calendar_check"],
+        }
+    except Exception as e:
+        memory.short_term.set_context("schedule_context", f"Calendar unavailable: {str(e)}")
+        return {
+            "completed_nodes": state.get("completed_nodes", []) + ["calendar_error"],
+        }
+
 def node_classify(state: AgentState) -> dict:
-    """Claude classifies, scores, routes, and drafts in one call."""
     system_prompt = build_system_prompt(
         memory_context=state.get("memory_block", ""),
         task_context=(
@@ -76,17 +98,15 @@ def node_classify(state: AgentState) -> dict:
             "log_episode":     parsed.get("memory_update", {}).get("log_episode"),
             "completed_nodes": state.get("completed_nodes", []) + ["classify"],
         }
-    except (json.JSONDecodeError, anthropic.APIError, Exception) as e:
+    except Exception as e:
         return {
             "error":           f"Classification error: {str(e)}",
             "routing":         "queue_approval",
-            "reasoning":       "Error during classification — defaulting to queue for safety.",
+            "reasoning":       "Error during classification - defaulting to queue for safety.",
             "completed_nodes": state.get("completed_nodes", []) + ["classify_error"],
         }
- 
- 
+
 def node_draft_response(state: AgentState) -> dict:
-    """Validate/store the draft. Log the action."""
     draft = state.get("draft_response") or "Thanks for your message. Jude will get back to you shortly."
     memory.short_term.add_turn("assistant", draft)
     memory.short_term.log_action(
@@ -99,12 +119,10 @@ def node_draft_response(state: AgentState) -> dict:
         "final_action":    f"Draft queued ({state['routing']})",
         "completed_nodes": state.get("completed_nodes", []) + ["draft_response"],
     }
- 
- 
+
 def node_escalate(state: AgentState) -> dict:
-    """Compose urgent Jude alert. No draft sent."""
     alert = (
-        f"🚨 URGENT — {state['sender']} via {state['source']}\n"
+        f"URGENT - {state['sender']} via {state['source']}\n"
         f"Category: {state['category']} | Score: {state['priority_score']}/10\n"
         f"Message: {state['message'][:200]}\n"
         f"Reason: {state.get('reasoning', 'High priority detected')}"
@@ -116,15 +134,13 @@ def node_escalate(state: AgentState) -> dict:
         {"category": state["category"], "score": state["priority_score"]},
     )
     return {
-        "final_action":    f"ESCALATED — {state['category']}",
+        "final_action":    f"ESCALATED - {state['category']}",
         "escalation_note": alert,
         "draft_response":  None,
         "completed_nodes": state.get("completed_nodes", []) + ["escalate"],
     }
- 
- 
+
 def node_update_memory(state: AgentState) -> dict:
-    """Persist new facts and episodes. Always enqueue in priority system."""
     if state.get("learn_fact"):
         fact_key = f"{state['sender'].lower().replace(' ', '_')}_{int(time.time())}"
         memory.long_term.set(fact_key, state["learn_fact"], namespace="clients", source="agent_learned")
@@ -133,8 +149,7 @@ def node_update_memory(state: AgentState) -> dict:
             title=f"Interaction with {state['sender']}",
             what=state["log_episode"],
             who=state["sender"],
-            outcome="unknown",
-            significance="medium",
+            outcome="unknown", significance="medium",
             tags=[state["category"], state["source"]],
         )
     memory.priority.enqueue(
@@ -146,21 +161,20 @@ def node_update_memory(state: AgentState) -> dict:
         tags=[state["category"]],
     )
     return {"completed_nodes": state.get("completed_nodes", []) + ["update_memory"]}
- 
- 
+
 def node_finalize(state: AgentState) -> dict:
-    """Log completed cycle."""
     memory.short_term.log_action(
         "cycle_complete", state.get("final_action", "completed"),
         {"sender": state["sender"], "category": state["category"],
          "routing": state["routing"], "score": state["priority_score"]},
     )
     return {"completed_nodes": state.get("completed_nodes", []) + ["finalize"]}
- 
- 
+
 def route_after_classify(state: AgentState) -> str:
-    """Conditional router — decides draft vs escalate."""
+    if state.get("error"):
+        return "draft"
     if state.get("routing") == "auto_escalate":
         return "escalate"
+    if state.get("category") == "scheduling":
+        return "calendar"
     return "draft"
- 

@@ -78,13 +78,16 @@ KEYWORD_BOOSTS: dict[str, int] = {
     "complaint":         3,
     "threatening":       4,
     "police":            5,
-    # Deadline risk
-    "exam":              5,
+    # Deadline risk — exam boosted higher due to Jude's history
+    "exam":              7,
+    "certification":     6,
     "deadline":          4,
     "expires":           4,
     "last chance":       4,
     "close of business": 3,
     "tomorrow":          2,
+    "don't forget":      3,
+    "reminder":          2,
     # Dampeners
     "just checking":    -2,
     "whenever":         -2,
