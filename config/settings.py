@@ -49,8 +49,15 @@ OPERATOR_ROLE   = "Real Estate Operator, Lagos Nigeria"
 TWILIO_ACCOUNT_SID      = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN       = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_NUMBER  = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
+TWILIO_PHONE_NUMBER     = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+# ── Jude personal details ─────────────────────────────────────────────────────
+JUDE_PERSONAL_NUMBER    = os.getenv("JUDE_PERSONAL_NUMBER", "")
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ── Deepgram ──────────────────────────────────────────────────────────────────
+DEEPGRAM_API_KEY        = os.getenv("DEEPGRAM_API_KEY", "")
  

@@ -136,6 +136,158 @@ async def whatsapp_webhook(request: Request):
     return PlainTextResponse("ok", status_code=200)
 
 
+# ── Voice webhook endpoints ───────────────────────────────────────────────────
+
+from integrations.voice import (
+    handle_inbound_call,
+    connect_and_record,
+    handle_missed_call,
+)
+from agent.call_processor import process_completed_call
+from fastapi.responses import Response
+import threading
+
+
+@app.post("/webhook/voice/inbound")
+async def voice_inbound(request: Request):
+    """
+    Called by Twilio when someone dials +1(912)922-3120.
+    Returns TwiML that screens the caller then connects to Jude.
+    """
+    form_data = dict(await request.form())
+    caller    = form_data.get("From", "unknown")
+
+    twiml = handle_inbound_call(caller)
+
+    # Twilio expects XML response with correct content type
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/webhook/voice/screened")
+async def voice_screened(request: Request):
+    """
+    Called after caller states their name and reason.
+    Now connects them to Jude and starts full call recording.
+    """
+    form_data           = dict(await request.form())
+    caller              = form_data.get("From", "unknown")
+    screen_recording    = form_data.get("RecordingUrl", None)
+
+    twiml = connect_and_record(caller, screen_recording)
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/webhook/voice/connect")
+async def voice_connect(request: Request):
+    """
+    Fallback — caller said nothing during screening.
+    Connect them directly anyway.
+    """
+    form_data = dict(await request.form())
+    caller    = form_data.get("From", "unknown")
+
+    twiml = connect_and_record(caller)
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/webhook/voice/completed")
+async def voice_completed(request: Request):
+    """
+    Called when the call ends.
+    If Jude didn't answer, trigger voicemail.
+    """
+    form_data   = dict(await request.form())
+    dial_status = form_data.get("DialCallStatus", "")
+    caller      = form_data.get("From", "unknown")
+
+    if dial_status in ["no-answer", "busy", "failed"]:
+        # Jude didn't pick up — take a voicemail
+        from integrations.voice import handle_missed_call
+        from integrations.telegram import send_alert
+        twiml = handle_missed_call(caller)
+        send_alert(
+            f"📵 Missed call from {caller}\n"
+            f"Status: {dial_status}\n"
+            f"Voicemail recording in progress."
+        )
+        return Response(content=twiml, media_type="application/xml")
+
+    from twilio.twiml.voice_response import VoiceResponse
+    response = VoiceResponse()
+    response.say("Thank you for calling. Goodbye.", voice="alice")
+    return Response(content=str(response), media_type="application/xml")
+
+
+@app.post("/webhook/voice/recording")
+async def voice_recording(request: Request):
+    """
+    Called by Twilio when a recording is ready for download.
+    This fires after EVERY call ends.
+
+    We process the recording in a background thread so we can
+    return 200 to Twilio immediately — Twilio has a response timeout.
+    """
+    form_data      = dict(await request.form())
+    recording_url  = form_data.get("RecordingUrl", "")
+    recording_sid  = form_data.get("RecordingSid", "")
+    call_sid       = form_data.get("CallSid", "")
+    caller         = form_data.get("From", "unknown")
+    duration       = form_data.get("RecordingDuration", "0")
+
+    if not recording_url:
+        return PlainTextResponse("ok", status_code=200)
+
+    # Add .mp3 extension — Twilio URL works with or without it
+    # but Deepgram prefers explicit format
+    if not recording_url.endswith(".mp3"):
+        recording_url = recording_url + ".mp3"
+
+    # Process in background thread — don't make Twilio wait
+    def process():
+        process_completed_call(
+            recording_url=recording_url,
+            caller_number=caller,
+            call_sid=call_sid,
+            call_type="inbound",
+        )
+
+    thread = threading.Thread(target=process, daemon=True)
+    thread.start()
+
+    return PlainTextResponse("ok", status_code=200)
+
+
+@app.post("/webhook/voice/voicemail")
+async def voice_voicemail(request: Request):
+    """
+    Called when a voicemail recording is complete.
+    Same processing pipeline as a regular call.
+    """
+    form_data     = dict(await request.form())
+    recording_url = form_data.get("RecordingUrl", "")
+    caller        = form_data.get("From", "unknown")
+    call_sid      = form_data.get("CallSid", "")
+
+    if recording_url:
+        if not recording_url.endswith(".mp3"):
+            recording_url += ".mp3"
+
+        def process():
+            process_completed_call(
+                recording_url=recording_url,
+                caller_number=caller,
+                call_sid=call_sid,
+                call_type="voicemail",
+            )
+
+        thread = threading.Thread(target=process, daemon=True)
+        thread.start()
+
+    from twilio.twiml.voice_response import VoiceResponse
+    response = VoiceResponse()
+    return Response(content=str(response), media_type="application/xml")
+
+
 # ── Telegram callback handler ─────────────────────────────────────────────────
 
 @app.post("/webhook/telegram")
